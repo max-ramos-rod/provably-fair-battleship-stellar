@@ -213,6 +213,39 @@ fn write_proof_output_json(content: &ProofOutputFile, path: &str) {
     println!("proof output saved: {}", path);
 }
 
+fn run_proof(input: &GameInput) -> Result<(risc0_zkvm::Receipt, PublicOutputJson), String> {
+    let env = ExecutorEnv::builder()
+        .write(input)
+        .map_err(|e| format!("failed to write executor input: {e}"))?
+        .build()
+        .map_err(|e| format!("failed to build executor env: {e}"))?;
+
+    let prover = default_prover();
+    let prove_info = prover
+        .prove(env, METHOD_ELF)
+        .map_err(|e| format!("prove failed: {e}"))?;
+    let receipt = prove_info.receipt;
+
+    receipt
+        .verify(METHOD_ID)
+        .map_err(|e| format!("receipt verification failed: {e}"))?;
+
+    let output: PublicOutput = receipt
+        .journal
+        .decode()
+        .map_err(|e| format!("journal decode failed: {e}"))?;
+
+    let public_output_json = PublicOutputJson {
+        session_id: output.session_id,
+        winner: output.winner,
+        board_hash_p1: hex::encode(output.board_hash_p1),
+        board_hash_p2: hex::encode(output.board_hash_p2),
+        total_moves: output.total_moves,
+    };
+
+    Ok((receipt, public_output_json))
+}
+
 fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::filter::EnvFilter::from_default_env())
@@ -239,21 +272,14 @@ fn main() {
     println!("proof output path: {}", cli.proof_out_path);
     println!("receipt output path: {}", cli.receipt_out_path);
 
-    let env = ExecutorEnv::builder().write(&input).unwrap().build().unwrap();
     let prover = default_prover();
 
-    let prove_info = prover.prove(env, METHOD_ELF).unwrap();
-    let receipt = prove_info.receipt;
-
-    receipt.verify(METHOD_ID).unwrap();
-
-    let output: PublicOutput = receipt.journal.decode().unwrap();
-    let public_output_json = PublicOutputJson {
-        session_id: output.session_id,
-        winner: output.winner,
-        board_hash_p1: hex::encode(output.board_hash_p1),
-        board_hash_p2: hex::encode(output.board_hash_p2),
-        total_moves: output.total_moves,
+    let (receipt, public_output_json) = match run_proof(&input) {
+        Ok(data) => data,
+        Err(err) => {
+            eprintln!("Error: {}", err);
+            std::process::exit(1);
+        }
     };
 
     println!("winner: {}", public_output_json.winner);
@@ -300,5 +326,69 @@ fn main() {
             };
             write_proof_output_json(&artifact, &cli.proof_out_path);
         }
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn valid_input_proves_successfully() {
+        let input = default_game_input(777);
+        let result = run_proof(&input);
+        assert!(result.is_ok(), "expected valid input to prove, got: {:?}", result.err());
+
+        let (_, out) = result.unwrap();
+        assert_eq!(out.session_id, 777);
+        assert_eq!(out.total_moves, 7);
+    }
+
+    #[test]
+    fn duplicate_shot_is_rejected_by_guest() {
+        let mut input = default_game_input(778);
+        // Duplicate shot for player 1 at (0,0)
+        input.moves = vec![
+            Move { player: 1, x: 0, y: 0 },
+            Move { player: 2, x: 1, y: 0 },
+            Move { player: 1, x: 0, y: 0 },
+            Move { player: 2, x: 2, y: 0 },
+        ];
+
+        let err = run_proof(&input).expect_err("expected duplicate shot to fail");
+        assert!(
+            err.contains("duplicate shot by player 1"),
+            "unexpected error message: {err}"
+        );
+    }
+
+
+    #[test]
+    fn moves_after_game_over_are_rejected() {
+        let mut input = default_game_input(779);
+        // P1 wins in 7 moves in default sample; add an extra move after game over.
+        input.moves.push(Move { player: 2, x: 2, y: 2 });
+
+        let err = run_proof(&input).expect_err("expected moves-after-game-over to fail");
+        assert!(
+            err.contains("moves after game over are not allowed"),
+            "unexpected error message: {err}"
+        );
+    }
+
+    #[test]
+    fn invalid_turn_order_is_rejected() {
+        let mut input = default_game_input(780);
+        input.moves = vec![
+            Move { player: 1, x: 0, y: 0 },
+            Move { player: 1, x: 1, y: 0 }, // invalid: player 1 twice
+        ];
+
+        let err = run_proof(&input).expect_err("expected invalid turn order to fail");
+        assert!(
+            err.contains("invalid turn order"),
+            "unexpected error message: {err}"
+        );
     }
 }
