@@ -53,3 +53,18 @@ game-input-*.json
 
 # Keep docs and examples tracked
 !**/game-input.example.json
+
+# Ignore upstream folders not used in submission
+Stellar-Game-Studio/.gitattributes
+Stellar-Game-Studio/.gitignore
+Stellar-Game-Studio/AGENTS.md
+Stellar-Game-Studio/CLAUDE.md
+Stellar-Game-Studio/LICENSE
+Stellar-Game-Studio/contracts/dice-duel/
+Stellar-Game-Studio/contracts/mock-game-hub/
+Stellar-Game-Studio/contracts/number-guess/
+Stellar-Game-Studio/contracts/twenty-one/
+Stellar-Game-Studio/docs/
+Stellar-Game-Studio/sgs_frontend/
+Stellar-Game-Studio/template_frontend/
+stellar-risc0-verifier/
