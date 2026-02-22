@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+
+members = [
+    "contracts/mock-game-hub",
+    "contracts/dice-duel",
+    "contracts/number-guess",
+    "contracts/twenty-one",
+    "contracts/zk-battleship"
+]
+
+[workspace.dependencies]
+soroban-sdk = "25.0.2"
+
+[profile.release]
+overflow-checks = true

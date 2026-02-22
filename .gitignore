@@ -1,0 +1,55 @@
+# Secrets / env
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+
+# Node / Bun
+node_modules/
+**/node_modules/
+.npm/
+.pnpm-store/
+.bun/
+
+# Build outputs
+*.tsbuildinfo
+build/
+dist/
+**/build/
+**/dist/
+coverage/
+**/coverage/
+
+# Rust / Cargo
+/target/
+**/target/
+
+# Soroban / generated wasm artifacts
+**/*.wasm
+**/wasm-hash.txt
+
+# Logs and temp
+*.log
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Local proof artifacts
+proof-output.json
+receipt.bin
+game-input-*.json
+
+# Keep docs and examples tracked
+!**/game-input.example.json
