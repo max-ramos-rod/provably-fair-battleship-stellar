@@ -125,15 +125,15 @@ fn default_game_input(session_id: u32) -> GameInput {
     GameInput {
         session_id,
         board_p1: [
-            1, 1, 0, 0, // y=0
-            1, 1, 0, 0, // y=1
-            0, 0, 0, 0, // y=2
+            1, 1, 0, 0, // y=0 (ship size 2)
+            0, 0, 0, 0, // y=1
+            1, 1, 0, 0, // y=2 (ship size 2)
             0, 0, 0, 0, // y=3
         ],
         board_p2: [
-            1, 1, 0, 0, // y=0
-            1, 1, 0, 0, // y=1
-            0, 0, 0, 0, // y=2
+            1, 1, 0, 0, // y=0 (ship size 2)
+            0, 0, 0, 0, // y=1
+            1, 1, 0, 0, // y=2 (ship size 2)
             0, 0, 0, 0, // y=3
         ],
         moves: vec![
@@ -144,8 +144,8 @@ fn default_game_input(session_id: u32) -> GameInput {
             },
             Move {
                 player: 2,
-                x: 0,
-                y: 0,
+                x: 3,
+                y: 3,
             },
             Move {
                 player: 1,
@@ -154,23 +154,23 @@ fn default_game_input(session_id: u32) -> GameInput {
             },
             Move {
                 player: 2,
-                x: 1,
-                y: 0,
+                x: 3,
+                y: 2,
             },
             Move {
                 player: 1,
                 x: 0,
-                y: 1,
+                y: 2,
             },
             Move {
                 player: 2,
-                x: 0,
-                y: 1,
+                x: 2,
+                y: 2,
             },
             Move {
                 player: 1,
                 x: 1,
-                y: 1,
+                y: 2,
             },
         ],
     }
@@ -359,6 +359,25 @@ mod tests {
         let err = run_proof(&input).expect_err("expected duplicate shot to fail");
         assert!(
             err.contains("duplicate shot by player 1"),
+            "unexpected error message: {err}"
+        );
+    }
+
+
+    #[test]
+    fn invalid_board_layout_is_rejected() {
+        let mut input = default_game_input(7781);
+        // 2x2 contiguous block is one ship of size 4, which is invalid for the new rule.
+        input.board_p1 = [
+            1, 1, 0, 0,
+            1, 1, 0, 0,
+            0, 0, 0, 0,
+            0, 0, 0, 0,
+        ];
+
+        let err = run_proof(&input).expect_err("expected invalid board layout to fail");
+        assert!(
+            err.contains("invalid board layout P1"),
             "unexpected error message: {err}"
         );
     }

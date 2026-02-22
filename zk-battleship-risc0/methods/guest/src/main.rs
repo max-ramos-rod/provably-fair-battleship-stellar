@@ -45,6 +45,62 @@ fn count_ships(board: &[u8; 16]) -> u8 {
     ships
 }
 
+fn has_two_size_two_ships(board: &[u8; 16]) -> bool {
+    let mut visited = [false; 16];
+    let mut components = [0u8; 4];
+    let mut component_count = 0usize;
+
+    for idx in 0..16 {
+        if board[idx] != 1 || visited[idx] {
+            continue;
+        }
+
+        if component_count >= components.len() {
+            return false;
+        }
+
+        let mut stack = [0usize; 16];
+        let mut stack_len = 0usize;
+        stack[stack_len] = idx;
+        stack_len += 1;
+        visited[idx] = true;
+
+        let mut size = 0u8;
+
+        while stack_len > 0 {
+            stack_len -= 1;
+            let current = stack[stack_len];
+            size += 1;
+
+            let x = (current % 4) as i8;
+            let y = (current / 4) as i8;
+            let neighbors = [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)];
+
+            for (nx, ny) in neighbors {
+                if nx < 0 || ny < 0 || nx >= 4 || ny >= 4 {
+                    continue;
+                }
+
+                let nidx = (ny as usize) * 4 + (nx as usize);
+                if board[nidx] == 1 && !visited[nidx] {
+                    visited[nidx] = true;
+                    stack[stack_len] = nidx;
+                    stack_len += 1;
+                }
+            }
+        }
+
+        components[component_count] = size;
+        component_count += 1;
+    }
+
+    if component_count != 2 {
+        return false;
+    }
+
+    components[0] == 2 && components[1] == 2
+}
+
 fn index(x: u8, y: u8) -> usize {
     (y as usize) * 4 + (x as usize)
 }
@@ -57,6 +113,12 @@ fn main() {
     }
     if count_ships(&input.board_p2) != 4 {
         panic!("invalid board P2");
+    }
+    if !has_two_size_two_ships(&input.board_p1) {
+        panic!("invalid board layout P1");
+    }
+    if !has_two_size_two_ships(&input.board_p2) {
+        panic!("invalid board layout P2");
     }
 
     let mut hits_p1 = 0u8;
