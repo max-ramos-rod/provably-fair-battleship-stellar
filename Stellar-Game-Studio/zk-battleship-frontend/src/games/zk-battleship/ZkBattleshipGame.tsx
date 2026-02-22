@@ -909,6 +909,65 @@ export function ZkBattleshipGame({
     }
   };
 
+  const validateTwoSizeTwoShips = (cells: number[]): string | null => {
+    if (cells.length !== 4) {
+      return 'Select exactly 4 ship cells before locking the board.';
+    }
+
+    const selected = new Set(cells);
+    const visited = new Set<number>();
+    const components: number[][] = [];
+
+    const neighbors = (cell: number): number[] => {
+      const x = (cell - 1) % 4;
+      const y = Math.floor((cell - 1) / 4);
+      const result: number[] = [];
+      const deltas = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+
+      for (const [dx, dy] of deltas) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx >= 0 && nx < 4 && ny >= 0 && ny < 4) {
+          const nextCell = ny * 4 + nx + 1;
+          if (selected.has(nextCell)) {
+            result.push(nextCell);
+          }
+        }
+      }
+
+      return result;
+    };
+
+    for (const cell of cells) {
+      if (visited.has(cell)) continue;
+
+      const queue = [cell];
+      const component: number[] = [];
+      visited.add(cell);
+
+      while (queue.length > 0) {
+        const current = queue.shift();
+        if (current === undefined) continue;
+        component.push(current);
+
+        for (const next of neighbors(current)) {
+          if (!visited.has(next)) {
+            visited.add(next);
+            queue.push(next);
+          }
+        }
+      }
+
+      components.push(component);
+    }
+
+    if (components.length !== 2 || components.some((component) => component.length !== 2)) {
+      return 'Invalid layout: board must contain exactly 2 ships of size 2.';
+    }
+
+    return null;
+  };
+
   const handleLockBoardSetup = () => {
     if (!gameState) return;
 
@@ -922,8 +981,9 @@ export function ZkBattleshipGame({
     }
 
     const selectedCells = setupStep === 1 ? boardP1Cells : boardP2Cells;
-    if (selectedCells.length !== 4) {
-      setError('Select exactly 4 ship cells before locking the board.');
+    const validationError = validateTwoSizeTwoShips(selectedCells);
+    if (validationError) {
+      setError(validationError);
       return;
     }
 
@@ -1542,9 +1602,9 @@ export function ZkBattleshipGame({
           {!boardSetupComplete && (
             <div className="space-y-4 p-5 bg-gradient-to-br from-indigo-50 to-purple-50 border-2 border-indigo-200 rounded-xl">
               <div>
-                <h4 className="text-sm font-black text-indigo-900">Board Setup (4 ships)</h4>
+                <h4 className="text-sm font-black text-indigo-900">Board Setup (2 ships of size 2)</h4>
                 <p className="text-xs font-semibold text-indigo-700 mt-1">
-                  Configure Player 1 first, then Player 2. Each player must lock exactly 4 cells.
+                  Configure Player 1 first, then Player 2. Each player must lock exactly 2 ships of size 2 (4 cells total).
                 </p>
               </div>
 
