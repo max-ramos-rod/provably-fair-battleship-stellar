@@ -64,6 +64,9 @@ pub enum Error {
     InvalidProofMaterial = 8,
     VerifierNotConfigured = 9,
     ProofVerificationFailed = 10,
+    BoardCommitAlreadySet = 11,
+    BoardCommitNotSet = 12,
+    BoardCommitMismatch = 13,
 }
 
 // ============================================================================
@@ -84,6 +87,8 @@ pub struct Game {
     pub total_moves: Option<u32>,
     pub board_hash_p1: Option<BytesN<32>>,
     pub board_hash_p2: Option<BytesN<32>>,
+    pub board_commit_p1: Option<BytesN<32>>,
+    pub board_commit_p2: Option<BytesN<32>>,
     pub journal_hash: Option<BytesN<32>>,
     pub seal_hash: Option<BytesN<32>>,
 }
@@ -193,6 +198,8 @@ impl ZkBattleshipContract {
             total_moves: None,
             board_hash_p1: None,
             board_hash_p2: None,
+            board_commit_p1: None,
+            board_commit_p2: None,
             journal_hash: None,
             seal_hash: None,
         };
@@ -258,6 +265,48 @@ impl ZkBattleshipContract {
         env.storage().temporary().set(&key, &game);
 
         // No event emitted - game state can be queried via get_game()
+
+        Ok(())
+    }
+
+
+    /// Store a player's board commitment hash on-chain.
+    ///
+    /// Commit values are enforced during `submit_result` (phase 2).
+    pub fn set_board_commit(
+        env: Env,
+        session_id: u32,
+        player: Address,
+        board_commit: BytesN<32>,
+    ) -> Result<(), Error> {
+        player.require_auth();
+
+        let key = DataKey::Game(session_id);
+        let mut game: Game = env
+            .storage()
+            .temporary()
+            .get(&key)
+            .ok_or(Error::GameNotFound)?;
+
+        if game.winner.is_some() {
+            return Err(Error::GameAlreadyEnded);
+        }
+
+        if player == game.player1 {
+            if game.board_commit_p1.is_some() {
+                return Err(Error::BoardCommitAlreadySet);
+            }
+            game.board_commit_p1 = Some(board_commit);
+        } else if player == game.player2 {
+            if game.board_commit_p2.is_some() {
+                return Err(Error::BoardCommitAlreadySet);
+            }
+            game.board_commit_p2 = Some(board_commit);
+        } else {
+            return Err(Error::NotPlayer);
+        }
+
+        env.storage().temporary().set(&key, &game);
 
         Ok(())
     }
@@ -407,6 +456,19 @@ impl ZkBattleshipContract {
 
         if journal.len() == 0 || seal.len() == 0 {
             return Err(Error::InvalidProofMaterial);
+        }
+
+        let commit_p1 = game
+            .board_commit_p1
+            .clone()
+            .ok_or(Error::BoardCommitNotSet)?;
+        let commit_p2 = game
+            .board_commit_p2
+            .clone()
+            .ok_or(Error::BoardCommitNotSet)?;
+
+        if commit_p1 != board_hash_p1 || commit_p2 != board_hash_p2 {
+            return Err(Error::BoardCommitMismatch);
         }
 
         let verifier_addr: Address = env

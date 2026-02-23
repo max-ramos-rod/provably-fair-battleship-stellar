@@ -528,6 +528,9 @@ fn test_submit_result_success() {
     let journal = soroban_sdk::Bytes::from_slice(&env, &[10u8, 11u8, 12u8]);
     let seal = soroban_sdk::Bytes::from_slice(&env, &[20u8, 21u8, 22u8]);
 
+    client.set_board_commit(&session_id, &player1, &board_hash_p1);
+    client.set_board_commit(&session_id, &player2, &board_hash_p2);
+
     let winner = client.submit_result(
         &session_id,
         &player1,
@@ -562,6 +565,9 @@ fn test_submit_result_rejects_invalid_proof() {
     let journal = soroban_sdk::Bytes::from_slice(&env, &[1u8, 2u8, 3u8]);
     let invalid_seal = soroban_sdk::Bytes::from_slice(&env, &[0u8, 9u8]);
 
+    client.set_board_commit(&session_id, &player1, &board_hash_p1);
+    client.set_board_commit(&session_id, &player2, &board_hash_p2);
+
     let result = client.try_submit_result(
         &session_id,
         &player1,
@@ -587,6 +593,9 @@ fn test_submit_result_requires_player_and_valid_inputs() {
     let board_hash_p2 = BytesN::from_array(&env, &[4u8; 32]);
     let journal = soroban_sdk::Bytes::from_slice(&env, &[1u8]);
     let seal = soroban_sdk::Bytes::from_slice(&env, &[2u8]);
+
+    client.set_board_commit(&session_id, &player1, &board_hash_p1);
+    client.set_board_commit(&session_id, &player2, &board_hash_p2);
 
     let not_player = client.try_submit_result(
         &session_id,
@@ -647,6 +656,85 @@ fn test_asymmetric_points() {
     let final_game = client.get_game(&session_id);
     assert!(final_game.winner.is_some()); // Game has ended
 }
+
+
+
+#[test]
+fn test_submit_result_requires_commits_and_matching_hashes() {
+    let (env, client, _hub, _verifier, player1, player2) = setup_test();
+
+    let session_id = 19u32;
+    client.start_game(&session_id, &player1, &player2, &100_0000000, &100_0000000);
+
+    let board_hash_p1 = BytesN::from_array(&env, &[7u8; 32]);
+    let board_hash_p2 = BytesN::from_array(&env, &[8u8; 32]);
+    let journal = soroban_sdk::Bytes::from_slice(&env, &[10u8]);
+    let seal = soroban_sdk::Bytes::from_slice(&env, &[11u8]);
+
+    let missing_commit = client.try_submit_result(
+        &session_id,
+        &player1,
+        &1u32,
+        &7u32,
+        &board_hash_p1,
+        &board_hash_p2,
+        &journal,
+        &seal,
+    );
+    assert_number_guess_error(&missing_commit, Error::BoardCommitNotSet);
+
+    client.set_board_commit(&session_id, &player1, &board_hash_p1);
+    client.set_board_commit(&session_id, &player2, &board_hash_p2);
+
+    let mismatched_hash = BytesN::from_array(&env, &[9u8; 32]);
+    let mismatch = client.try_submit_result(
+        &session_id,
+        &player1,
+        &1u32,
+        &7u32,
+        &mismatched_hash,
+        &board_hash_p2,
+        &journal,
+        &seal,
+    );
+    assert_number_guess_error(&mismatch, Error::BoardCommitMismatch);
+}
+
+
+#[test]
+fn test_set_board_commit_stores_hashes() {
+    let (env, client, _hub, _verifier, player1, player2) = setup_test();
+
+    let session_id = 16u32;
+    client.start_game(&session_id, &player1, &player2, &100_0000000, &100_0000000);
+
+    let commit1 = BytesN::from_array(&env, &[11u8; 32]);
+    let commit2 = BytesN::from_array(&env, &[22u8; 32]);
+
+    client.set_board_commit(&session_id, &player1, &commit1);
+    client.set_board_commit(&session_id, &player2, &commit2);
+
+    let game = client.get_game(&session_id);
+    assert_eq!(game.board_commit_p1, Some(commit1));
+    assert_eq!(game.board_commit_p2, Some(commit2));
+}
+
+#[test]
+fn test_set_board_commit_rejects_duplicates() {
+    let (env, client, _hub, _verifier, player1, player2) = setup_test();
+
+    let session_id = 17u32;
+    client.start_game(&session_id, &player1, &player2, &100_0000000, &100_0000000);
+
+    let commit1 = BytesN::from_array(&env, &[33u8; 32]);
+    let commit2 = BytesN::from_array(&env, &[44u8; 32]);
+
+    client.set_board_commit(&session_id, &player1, &commit1);
+
+    let duplicate = client.try_set_board_commit(&session_id, &player1, &commit2);
+    assert_number_guess_error(&duplicate, Error::BoardCommitAlreadySet);
+}
+
 
 // ============================================================================
 // Admin Function Tests

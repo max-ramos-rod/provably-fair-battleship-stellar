@@ -21,6 +21,37 @@ const createRandomSessionId = (): number => {
   return (Math.floor(Math.random() * 0xffffffff) >>> 0) || 1;
 };
 
+const toHex = (value: unknown): string | null => {
+  if (value === null || value === undefined) return null;
+
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase().replace(/^0x/, '');
+    return /^[0-9a-f]+$/.test(normalized) ? normalized : null;
+  }
+
+  const maybeToString = value as { toString?: (encoding?: string) => string };
+  if (typeof maybeToString.toString === 'function') {
+    const text = maybeToString.toString('hex').trim().toLowerCase();
+    if (/^[0-9a-f]+$/.test(text)) return text;
+  }
+
+  let bytes: Uint8Array | null = null;
+  if (value instanceof Uint8Array) {
+    bytes = value;
+  } else if (Array.isArray(value) && value.every((item) => Number.isInteger(item) && item >= 0 && item <= 255)) {
+    bytes = Uint8Array.from(value as number[]);
+  }
+
+  if (!bytes) return null;
+  return Array.from(bytes).map((byte) => byte.toString(16).padStart(2, '0')).join('');
+};
+
+const shortText = (value: string | null | undefined, keep = 8): string => {
+  if (!value) return '—';
+  if (value.length <= keep * 2) return value;
+  return `${value.slice(0, keep)}...${value.slice(-keep)}`;
+};
+
 // Create service instance with the contract ID
 const zkBattleshipService = new ZkBattleshipService(ZK_BATTLESHIP_CONTRACT);
 
@@ -86,6 +117,10 @@ export function ZkBattleshipGame({
   const [boardP2Cells, setBoardP2Cells] = useState<number[]>([]);
   const [boardP1Locked, setBoardP1Locked] = useState(false);
   const [boardP2Locked, setBoardP2Locked] = useState(false);
+  const [submittedProof, setSubmittedProof] = useState<ZkProofPayload | null>(null);
+  const [settlementTxHash, setSettlementTxHash] = useState<string | null>(null);
+  const [verifierContract, setVerifierContract] = useState<string | null>(null);
+  const [imageIdHex, setImageIdHex] = useState<string | null>(null);
 
   useEffect(() => {
     setPlayer1Address(userAddress);
@@ -108,6 +143,10 @@ export function ZkBattleshipGame({
     setBoardP1Locked(false);
     setBoardP2Locked(false);
     setShotCell(null);
+    setSubmittedProof(null);
+    setSettlementTxHash(null);
+    setVerifierContract(null);
+    setImageIdHex(null);
   }, [sessionId]);
 
 
@@ -169,6 +208,10 @@ export function ZkBattleshipGame({
     setBoardP2Cells([]);
     setBoardP1Locked(false);
     setBoardP2Locked(false);
+    setSubmittedProof(null);
+    setSettlementTxHash(null);
+    setVerifierContract(null);
+    setImageIdHex(null);
     setPlayer1Address(userAddress);
     setPlayer1Points(DEFAULT_POINTS);
   };
@@ -259,6 +302,25 @@ export function ZkBattleshipGame({
       return () => clearInterval(interval);
     }
   }, [sessionId, gamePhase, localWinner]);
+
+  useEffect(() => {
+    if (gamePhase !== 'complete') return;
+
+    let active = true;
+    (async () => {
+      const [verifier, imageId] = await Promise.all([
+        zkBattleshipService.getVerifier(),
+        zkBattleshipService.getImageId(),
+      ]);
+      if (!active) return;
+      setVerifierContract(verifier);
+      setImageIdHex(imageId);
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [gamePhase, sessionId]);
 
   // Auto-refresh standings when game completes (for passive player who didn't call reveal_winner)
   useEffect(() => {
@@ -1160,7 +1222,10 @@ export function ZkBattleshipGame({
           throw new Error(`Proof total_moves (${payload.totalMoves}) does not match local move count (${moves.length}).`);
         }
         const signer = getContractSigner();
-        await zkBattleshipService.submitResult(sessionId, userAddress, payload, signer);
+        const submitOutcome = await zkBattleshipService.submitResult(sessionId, userAddress, payload, signer);
+
+        setSubmittedProof(payload);
+        setSettlementTxHash(submitOutcome.txHash);
 
         const updatedGame = await waitForWinner();
         setGameState(updatedGame);
@@ -1191,18 +1256,32 @@ export function ZkBattleshipGame({
   const isTurnPlayerConnected = currentTurn === 1 ? Boolean(isPlayer1) : Boolean(isPlayer2);
   const player1ShotsCount = moves.filter((move) => move.player === 1).length;
   const player2ShotsCount = moves.filter((move) => move.player === 2).length;
+  const activeShooter: 1 | 2 | null = isPlayer1 ? 1 : isPlayer2 ? 2 : null;
+  const activeTargetBoard = activeShooter === 1 ? boardP2Cells : boardP1Cells;
+  const activeShotResults = new Map<number, boolean>();
+  if (activeShooter !== null) {
+    for (const move of moves) {
+      if (move.player !== activeShooter) continue;
+      activeShotResults.set(move.cell, activeTargetBoard.includes(move.cell));
+    }
+  }
 
-  const winningNumber = gameState?.winning_number;
-  const player1Guess = gameState?.player1_guess;
-  const player2Guess = gameState?.player2_guess;
-  const player1Distance =
-    winningNumber !== null && winningNumber !== undefined && player1Guess !== null && player1Guess !== undefined
-      ? Math.abs(Number(player1Guess) - Number(winningNumber))
-      : null;
-  const player2Distance =
-    winningNumber !== null && winningNumber !== undefined && player2Guess !== null && player2Guess !== undefined
-      ? Math.abs(Number(player2Guess) - Number(winningNumber))
-      : null;
+  const moveHistory = moves.slice(-6).map((move) => {
+    const targetBoard = move.player === 1 ? boardP2Cells : boardP1Cells;
+    return {
+      ...move,
+      hit: targetBoard.includes(move.cell),
+    };
+  }).reverse();
+
+  const commitHashP1 = toHex(gameState?.board_commit_p1);
+  const commitHashP2 = toHex(gameState?.board_commit_p2);
+  const proofHashP1 = submittedProof?.boardHashP1Hex ?? toHex(gameState?.board_hash_p1);
+  const proofHashP2 = submittedProof?.boardHashP2Hex ?? toHex(gameState?.board_hash_p2);
+  const hashMatchP1 = Boolean(commitHashP1 && proofHashP1 && commitHashP1 === proofHashP1);
+  const hashMatchP2 = Boolean(commitHashP2 && proofHashP2 && commitHashP2 === proofHashP2);
+  const proofMoves = submittedProof?.totalMoves ?? moves.length;
+  const settlementTxUrl = settlementTxHash ? `https://stellar.expert/explorer/testnet/tx/${settlementTxHash}` : null;
 
   const hostInputFileName = `game-input-${sessionId}.json`;
   const hostInputPath = `/home/max/battleship-project/zk-battleship-risc0/${hostInputFileName}`;
@@ -1660,20 +1739,46 @@ export function ZkBattleshipGame({
                 Select Your Shot (4x4 Grid)
               </label>
               <div className="grid grid-cols-4 gap-3">
-                {Array.from({ length: 16 }, (_, i) => i + 1).map((cell) => (
-                  <button
-                    key={cell}
-                    onClick={() => setShotCell(cell)}
-                    className={`p-4 rounded-xl border-2 font-black text-xl transition-all ${
-                      shotCell === cell
-                        ? 'border-purple-500 bg-gradient-to-br from-purple-500 to-pink-500 text-white scale-110 shadow-2xl'
-                        : 'border-gray-200 bg-white hover:border-purple-300 hover:shadow-lg hover:scale-105'
-                    }`}
-                  >
-                    {cell}
-                  </button>
-                ))}
+                {Array.from({ length: 16 }, (_, i) => i + 1).map((cell) => {
+                  const hasShot = activeShotResults.has(cell);
+                  const isHit = activeShotResults.get(cell) === true;
+                  const isMiss = hasShot && !isHit;
+                  return (
+                    <button
+                      key={cell}
+                      onClick={() => setShotCell(cell)}
+                      disabled={hasShot}
+                      className={`p-4 rounded-xl border-2 font-black text-xl transition-all disabled:cursor-not-allowed ${
+                        isHit
+                          ? 'border-emerald-500 bg-gradient-to-br from-emerald-500 to-green-500 text-white shadow-xl'
+                          : isMiss
+                            ? 'border-rose-500 bg-gradient-to-br from-rose-500 to-red-500 text-white shadow-xl'
+                            : shotCell === cell
+                              ? 'border-purple-500 bg-gradient-to-br from-purple-500 to-pink-500 text-white scale-110 shadow-2xl'
+                              : 'border-gray-200 bg-white hover:border-purple-300 hover:shadow-lg hover:scale-105'
+                      }`}
+                    >
+                      {isHit ? '🚢✓' : isMiss ? '💣' : cell}
+                    </button>
+                  );
+                })}
               </div>
+              <div className="flex flex-wrap gap-4 text-xs font-semibold text-gray-600">
+                <span>🚢✓ Hit</span>
+                <span>💣 Miss</span>
+              </div>
+              {moveHistory.length > 0 && (
+                <div className="p-3 rounded-xl border border-gray-200 bg-white/70">
+                  <div className="text-xs font-bold text-gray-600 mb-2">Last shots</div>
+                  <div className="space-y-1.5">
+                    {moveHistory.map((entry, index) => (
+                      <div key={`${entry.player}-${entry.cell}-${index}`} className="text-xs font-semibold text-gray-700">
+                        P{entry.player} {'>'} Cell {entry.cell} {'>'} {entry.hit ? '🚢 HIT' : '💣 MISS'}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
               <button
                 onClick={handleSubmitShot}
                 disabled={isBusy || shotCell === null || !isTurnPlayerConnected}
@@ -1782,51 +1887,77 @@ export function ZkBattleshipGame({
       {/* COMPLETE PHASE */}
       {gamePhase === 'complete' && gameState && (
         <div className="space-y-6">
-          <div className="p-10 bg-gradient-to-br from-green-50 via-emerald-50 to-teal-50 border-2 border-green-300 rounded-2xl text-center shadow-2xl">
-            <div className="text-7xl mb-6">🏆</div>
-            <h3 className="text-3xl font-black text-gray-900 mb-4">
-              Game Complete!
-            </h3>
-            <div className="text-2xl font-black text-green-700 mb-6">
-              Winning Cell: {gameState.winning_number}
+          <div className="p-8 bg-gradient-to-br from-green-50 via-emerald-50 to-teal-50 border-2 border-green-300 rounded-2xl shadow-2xl">
+            <div className="text-center mb-6">
+              <div className="text-6xl mb-3">🏆</div>
+              <h3 className="text-3xl font-black text-gray-900">Verified Match Complete</h3>
+              <p className="text-sm font-semibold text-gray-700 mt-2">
+                Session {sessionId} settled on-chain with ZK verification.
+              </p>
             </div>
-            <div className="space-y-3 mb-6">
-              <div className="p-4 bg-white/70 border border-green-200 rounded-xl">
-                <p className="text-xs font-bold uppercase tracking-wide text-gray-600 mb-1">Player 1</p>
-                <p className="font-mono text-xs text-gray-700 mb-2">
-                  {gameState.player1.slice(0, 8)}...{gameState.player1.slice(-4)}
-                </p>
-                <p className="text-sm font-semibold text-gray-800">
-                  Shot: {gameState.player1_guess ?? '—'}
-                  {player1Distance !== null ? ` (distance ${player1Distance})` : ''}
-                </p>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="p-4 bg-white/80 border border-green-200 rounded-xl">
+                <p className="text-xs font-bold uppercase tracking-wide text-gray-600 mb-1">Session ID</p>
+                <p className="font-mono text-sm font-semibold text-gray-800">{sessionId}</p>
+              </div>
+              <div className="p-4 bg-white/80 border border-green-200 rounded-xl">
+                <p className="text-xs font-bold uppercase tracking-wide text-gray-600 mb-1">Winner</p>
+                <p className="font-mono text-sm font-semibold text-gray-800">{shortText(gameState.winner ?? null)}</p>
+              </div>
+              <div className="p-4 bg-white/80 border border-green-200 rounded-xl">
+                <p className="text-xs font-bold uppercase tracking-wide text-gray-600 mb-1">Total Moves</p>
+                <p className="font-mono text-sm font-semibold text-gray-800">{proofMoves}</p>
+              </div>
+            </div>
+
+            <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="p-4 bg-white border border-blue-200 rounded-xl">
+                <p className="text-sm font-black text-blue-900 mb-2">Start / Commit</p>
+                <p className="text-xs text-gray-700 mb-1">Board commit P1: <span className="font-mono">{shortText(commitHashP1)}</span></p>
+                <p className="text-xs text-gray-700 mb-1">Board commit P2: <span className="font-mono">{shortText(commitHashP2)}</span></p>
+                <p className="text-xs font-semibold text-blue-700 mt-2">Boards committed at game start (anti-tampering checkpoint).</p>
               </div>
 
-              <div className="p-4 bg-white/70 border border-green-200 rounded-xl">
-                <p className="text-xs font-bold uppercase tracking-wide text-gray-600 mb-1">Player 2</p>
-                <p className="font-mono text-xs text-gray-700 mb-2">
-                  {gameState.player2.slice(0, 8)}...{gameState.player2.slice(-4)}
-                </p>
-                <p className="text-sm font-semibold text-gray-800">
-                  Shot: {gameState.player2_guess ?? '—'}
-                  {player2Distance !== null ? ` (distance ${player2Distance})` : ''}
-                </p>
+              <div className="p-4 bg-white border border-yellow-200 rounded-xl">
+                <p className="text-sm font-black text-yellow-900 mb-2">Proof Generation</p>
+                <p className="text-xs text-gray-700 mb-1">Proof hash P1: <span className="font-mono">{shortText(proofHashP1)}</span></p>
+                <p className="text-xs text-gray-700 mb-1">Proof hash P2: <span className="font-mono">{shortText(proofHashP2)}</span></p>
+                <p className="text-xs text-gray-700 mt-2">Local comparison: {hashMatchP1 && hashMatchP2 ? 'MATCH ✅' : 'MISMATCH ❌'}</p>
+                <p className="text-xs font-semibold text-yellow-700 mt-1">ZK proof computed from full match transcript.</p>
+              </div>
+
+              <div className="p-4 bg-white border border-purple-200 rounded-xl">
+                <p className="text-sm font-black text-purple-900 mb-2">Final On-chain Verification</p>
+                <p className="text-xs text-gray-700 mb-1">Commit check: {hashMatchP1 && hashMatchP2 ? 'commit == proof ✅' : 'failed ❌'}</p>
+                <p className="text-xs text-gray-700 mb-1">Verifier: <span className="font-mono">{shortText(verifierContract, 6)}</span></p>
+                <p className="text-xs text-gray-700 mb-1">Image ID: <span className="font-mono">{shortText(imageIdHex, 8)}</span></p>
+                <p className="text-xs text-gray-700">Result settled: {gameState.winner ? 'winner recorded ✅' : 'pending'}</p>
+                <p className="text-xs font-semibold text-purple-700 mt-1">No board changes possible after commit.</p>
               </div>
             </div>
-            {gameState.winner && (
-              <div className="mt-6 p-5 bg-white border-2 border-green-200 rounded-xl shadow-lg">
-                <p className="text-xs font-bold uppercase tracking-wide text-gray-600 mb-2">Winner</p>
-                <p className="font-mono text-sm font-bold text-gray-800">
-                  {gameState.winner.slice(0, 8)}...{gameState.winner.slice(-4)}
-                </p>
-                {gameState.winner === userAddress && (
-                  <p className="mt-3 text-green-700 font-black text-lg">
-                    🎉 You won!
-                  </p>
-                )}
-              </div>
+
+            <div className="mt-6 p-4 bg-white/80 border border-green-200 rounded-xl">
+              <p className="text-xs font-bold uppercase tracking-wide text-gray-600 mb-1">Settlement Transaction</p>
+              {settlementTxUrl ? (
+                <a
+                  href={settlementTxUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-sm font-mono text-blue-700 underline break-all"
+                >
+                  {settlementTxHash}
+                </a>
+              ) : (
+                <p className="text-sm font-mono text-gray-600">Not captured in this session</p>
+              )}
+            </div>
+
+            {gameState.winner === userAddress && (
+              <p className="mt-5 text-center text-xl font-black text-green-700">🎉 You won!</p>
             )}
           </div>
+
           <button
             onClick={handleStartNewGame}
             className="w-full py-4 rounded-xl font-bold text-gray-700 bg-gradient-to-r from-gray-200 to-gray-300 hover:from-gray-300 hover:to-gray-400 transition-all shadow-lg hover:shadow-xl transform hover:scale-105"

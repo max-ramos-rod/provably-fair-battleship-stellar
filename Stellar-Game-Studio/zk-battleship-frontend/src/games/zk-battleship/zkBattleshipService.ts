@@ -18,10 +18,15 @@ export interface ZkProofPayload {
   sealHex: string;
 }
 
+export interface SubmitResultOutcome {
+  result: string;
+  txHash: string | null;
+}
+
 
 const RISC0_SEAL_EXPECTED_BYTES = 260;
 const RISC0_SEAL_RAW_BYTES = 256;
-const RISC0_SELECTOR_HEX = (import.meta.env.VITE_RISC0_VERIFIER_SELECTOR || '1fad1191').toLowerCase();
+const RISC0_SELECTOR_HEX = (import.meta.env.VITE_RISC0_VERIFIER_SELECTOR || '73c457ba').toLowerCase();
 
 function normalizeSealHexForVerifier(sealHex: string): string {
   const normalized = sealHex.trim().toLowerCase().replace(/^0x/, '');
@@ -106,6 +111,30 @@ export class ZkBattleshipService {
     } catch (err) {
       // Simulation or contract call failed
       console.log('[getGame] Error querying game:', err);
+      return null;
+    }
+  }
+
+  async getVerifier(): Promise<string | null> {
+    try {
+      const tx = await this.baseClient.get_verifier();
+      const result = await tx.simulate();
+      return result.result.isOk() ? result.result.unwrap() : null;
+    } catch (err) {
+      console.log('[getVerifier] Error querying verifier:', err);
+      return null;
+    }
+  }
+
+  async getImageId(): Promise<string | null> {
+    try {
+      const tx = await this.baseClient.get_image_id();
+      const result = await tx.simulate();
+      if (!result.result.isOk()) return null;
+      const imageBytes = result.result.unwrap();
+      return Buffer.from(imageBytes).toString('hex');
+    } catch (err) {
+      console.log('[getImageId] Error querying image id:', err);
       return null;
     }
   }
@@ -687,7 +716,7 @@ export class ZkBattleshipService {
     payload: ZkProofPayload,
     signer: Pick<contract.ClientOptions, 'signTransaction' | 'signAuthEntry'>,
     authTtlMinutes?: number
-  ) {
+  ): Promise<SubmitResultOutcome> {
     const client = this.createSigningClient(submitterAddress, signer);
 
     const boardHashP1 = hexToBuffer(payload.boardHashP1Hex, 32);
@@ -718,7 +747,10 @@ export class ZkBattleshipService {
         throw new Error(`Transaction failed: ${errorMessage}`);
       }
 
-      return sentTx.result;
+      return {
+        result: sentTx.result,
+        txHash: (sentTx as any).hash ?? (sentTx as any).getTransactionResponse?.hash ?? null,
+      };
     } catch (err) {
       if (err instanceof Error && err.message.includes('Transaction failed!')) {
         throw new Error('Transaction failed - check proof payload fields and game state');
